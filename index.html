@@ -40,7 +40,7 @@ button.on{background:#fff;color:#000}
 
 <div id="start">
   <h2>Scatto guidato</h2>
-  <p>Telefono appoggiato ad altezza anca, a circa 3 m. Corpo intero dentro le due linee orizzontali. La foto parte solo quando la livella è verde.</p>
+  <p>Telefono appoggiato ad altezza anca, a circa 3 m. Corpo intero dentro le due linee orizzontali. La foto parte quando il pallino è nel verde o nel giallo; nel rosso non scatta.</p>
   <button id="ok" style="background:#e8ff3a;color:#000;border:0">Apri la fotocamera</button>
   <p id="err"></p>
 </div>
@@ -60,7 +60,7 @@ button.on{background:#fff;color:#000}
 const $=id=>document.getElementById(id);
 const v=$('v'),o=$('o'),ctx=o.getContext('2d');
 let mode='profilo',tilt={a:99,b:99},stream=null,phase='idle',t0=0,steady=0,lastBlob=null,lastName='';
-const TOL=1.0; // gradi
+const TOL=1.0,WARN=5.0,SCALE=7; // gradi: verde ≤1°, giallo ≤5° (correggibile), rosso oltre (foto non valida); SCALE = gradi al bordo del quadrante
 
 $('modes').addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;
@@ -78,7 +78,7 @@ function onMotion(e){
     a=Math.atan2(g.z,Math.abs(g.y))*180/Math.PI; // avanti/indietro
     b=Math.atan2(g.x,Math.abs(g.y))*180/Math.PI; // rotazione laterale
   }
-  const k=.15;
+  const k=.08;
   tilt.a=tilt.a>90?a:tilt.a+(a-tilt.a)*k;
   tilt.b=tilt.b>90?b:tilt.b+(b-tilt.b)*k;
 }
@@ -104,7 +104,7 @@ $('go').addEventListener('click',()=>{
   else{phase='idle';$('go').textContent='Autoscatto 10 s';$('msg').textContent=''}
 });
 
-function level(){return Math.abs(tilt.a)<=TOL&&Math.abs(tilt.b)<=TOL}
+function zone(){const m=Math.hypot(tilt.a,tilt.b);return m<=TOL?'verde':m<=WARN?'giallo':'rosso'}
 
 function drawGuides(W,H,ok){
   ctx.lineWidth=2;ctx.setLineDash([10,8]);ctx.strokeStyle='rgba(255,255,255,.8)';
@@ -129,14 +129,15 @@ function drawGuides(W,H,ok){
     ctx.fillText('piedi sopra questa linea',12,bot+20);
   }
   // livella a bolla
-  const R=56,cx=W-R-16,cy=H*.18+R;
-  ctx.fillStyle='rgba(0,0,0,.45)';ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.fill();
-  ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=1.5;
+  const R=72,cx=W-R-16,cy=H*.18+R,s=R/SCALE;
+  ctx.fillStyle='rgba(255,60,60,.45)';ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.fill();
+  ctx.fillStyle='rgba(255,210,0,.55)';ctx.beginPath();ctx.arc(cx,cy,WARN*s,0,7);ctx.fill();
+  ctx.fillStyle='rgba(60,255,110,.75)';ctx.beginPath();ctx.arc(cx,cy,TOL*s,0,7);ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.8)';ctx.lineWidth=1.5;
   ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.stroke();
-  ctx.beginPath();ctx.arc(cx,cy,R*TOL/6,0,7);ctx.stroke();
-  const s=R/6,bx=Math.max(-R,Math.min(R,tilt.b*s)),by=Math.max(-R,Math.min(R,tilt.a*s));
-  ctx.fillStyle=ok?'#3dff6e':'#ff4d4d';
-  ctx.beginPath();ctx.arc(cx-bx,cy+by,10,0,7);ctx.fill();
+  const bx=Math.max(-R,Math.min(R,tilt.b*s)),by=Math.max(-R,Math.min(R,tilt.a*s));
+  ctx.fillStyle='#fff';ctx.strokeStyle='#000';ctx.lineWidth=2;
+  ctx.beginPath();ctx.arc(cx-bx,cy+by,6,0,7);ctx.fill();ctx.stroke();
   ctx.fillStyle='#fff';ctx.font='600 13px system-ui';ctx.textAlign='center';
   const fa=Math.abs(tilt.a)>45?'–':tilt.a.toFixed(1)+'°',fb=Math.abs(tilt.b)>45?'–':tilt.b.toFixed(1)+'°';
   ctx.fillText(fa+' / '+fb,cx,cy+R+18);
@@ -146,17 +147,17 @@ function loop(t){
   const dpr=devicePixelRatio||1,W=innerWidth,H=innerHeight;
   if(o.width!==W*dpr){o.width=W*dpr;o.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
   ctx.clearRect(0,0,W,H);
-  const ok=level();
+  const z=zone(),ok=z!=='rosso';
   drawGuides(W,H,ok);
   const noSensor=tilt.a>90;
-  $('info').textContent=noSensor?'Sensore di inclinazione non disponibile':(ok?'In bolla':'Raddrizza il telefono finché la bolla è verde');
+  $('info').textContent=noSensor?'Sensore di inclinazione non disponibile':(z==='verde'?'In bolla':z==='giallo'?'Inclinazione correggibile: la foto vale':'Troppo inclinato: la foto non vale');
   if(phase==='count'){
     const left=10-(t-t0)/1000;
     if(left>0){$('msg').textContent=Math.ceil(left)}
     else{phase='wait';steady=0}
   }
   if(phase==='wait'){
-    if(ok||noSensor){steady+=16;$('msg').textContent='Fermo…';if(steady>800)shoot()}
+    if(ok||noSensor){steady+=16;$('msg').textContent='Fermo…';if(steady>1000)shoot()}
     else{steady=0;$('msg').textContent='Livella'}
   }
   requestAnimationFrame(loop);
@@ -168,7 +169,7 @@ function beep(){
 
 async function shoot(){
   phase='busy';$('msg').textContent='';
-  const ta=tilt.a,tb=tilt.b;
+  const ta=tilt.a,tb=tilt.b,zz=zone();
   let blob=null;
   try{
     const tr=stream.getVideoTracks()[0];
@@ -181,10 +182,10 @@ async function shoot(){
   }
   beep();
   const d=new Date(),p=n=>String(n).padStart(2,'0');
-  lastName=`bikefit_${mode}_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_incl${ta.toFixed(1)}_${tb.toFixed(1)}.jpg`;
+  lastName=`bikefit_${mode}_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_${zz}_incl${ta.toFixed(1)}_${tb.toFixed(1)}.jpg`;
   lastBlob=blob;
   $('img').src=URL.createObjectURL(blob);
-  $('meta').textContent=`${mode} · inclinazione ${ta.toFixed(1)}° / ${tb.toFixed(1)}°`;
+  $('meta').textContent=`${mode} · ${zz} · inclinazione ${ta.toFixed(1)}° / ${tb.toFixed(1)}°`;
   $('rev').style.display='flex';
 }
 
